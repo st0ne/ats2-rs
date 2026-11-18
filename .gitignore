@@ -1,0 +1,64 @@
+# Rust build output and caches
+/target/
+**/target/
+**/.cache/
+
+# Editor and local workspace files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files, logs, and analysis dumps
+*.tmp
+*.temp
+*.log
+*.dump
+*.trace
+*.dmp
+*.bak
+*.raw
+
+# Hardware captures and device-specific artifacts
+/captures/
+*.usbcap
+*.pcap
+*.pcapng
+*.beagle
+
+# Proprietary Windows binaries, firmware, installers, and archives
+*.dll
+*.exe
+*.sys
+*.msi
+*.cab
+*.ocx
+*.bin
+*.fw
+*.firmware
+*.hex
+*.rom
+*.img
+*.iso
+*.zip
+*.7z
+*.rar
+
+# Credentials and local configuration
+.env
+.env.*
+*.env
+!.env.example
+.netrc
+.authinfo
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*credential*
+*credentials*
+*secret*
