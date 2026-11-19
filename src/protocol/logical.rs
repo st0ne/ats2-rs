@@ -39,6 +39,148 @@ pub enum ApibDecodeError {
     InvalidResponseLength { expected: usize, actual: usize },
 }
 
+/// Largest address value that can be passed to the observed legacy
+/// `ap_write_to_dsp_addr` byte/status path.
+pub const LOW_24_BIT_MAX: u32 = 0x00ff_ffff;
+
+/// The only retry-limit argument established for the observed byte/status path.
+pub const AP_WRITE_TO_DSP_RETRY_LIMIT: u8 = 10;
+
+/// Explicit caller-supplied arguments for one conditional DSP data-byte step.
+///
+/// This is a host-side model only. In particular, callers remain responsible for
+/// the DspObj-presence, status, and legacy-backend preconditions established by
+/// static analysis; this type neither checks nor invents those conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApibWriteToDspByteInput {
+    /// APIO object argument, whose device-level meaning is not established.
+    pub object: u8,
+    /// Address argument, constrained to the observed low-24-bit domain.
+    pub address: u32,
+    /// First caller-supplied APIO context token.
+    pub token9: u8,
+    /// One DSP data byte.
+    pub data: u8,
+    /// Second caller-supplied APIO context token.
+    pub token13: u8,
+    /// Explicit APIO retry-limit argument; the observed sequence uses 10.
+    pub retry_limit: u8,
+}
+
+/// Complete logical argument record for the legacy `ap_write_tx` primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApWriteTxArguments {
+    /// Caller-supplied APIO object argument.
+    pub object: u8,
+    /// The primitive's 24-bit value argument represented losslessly as `u32`.
+    pub value: u32,
+    /// Explicit APIO retry-limit argument.
+    pub retry_limit: u8,
+}
+
+/// Complete logical argument record for the legacy `ap_hv` primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApHvArguments {
+    /// Caller-supplied APIO object argument.
+    pub object: u8,
+    /// Caller-supplied APIO token; no device meaning is inferred.
+    pub token: u8,
+    /// Explicit APIO retry-limit argument.
+    pub retry_limit: u8,
+}
+
+/// One non-serialized logical primitive in the observed legacy byte/status path.
+///
+/// These records intentionally do not reuse [`ApibOperation`]: its variants are
+/// established Common-APIB tag encodings, whereas no USB/APIB frame encoding is
+/// established here for `ap_write_tx` or `ap_hv`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyApibOperation {
+    /// A legacy `ap_write_tx` call with its complete host arguments.
+    WriteTx(ApWriteTxArguments),
+    /// A legacy `ap_hv` call with its complete host arguments.
+    Hv(ApHvArguments),
+}
+
+/// A fixed four-record host transaction plan for exactly one DSP data byte.
+///
+/// The plan represents the static modes-0/2 call order only. It performs no
+/// serialization, USB/APIB transfer, retry, sleep, poll, or status handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LegacyApibWriteToDspBytePlan {
+    operations: [LegacyApibOperation; 4],
+}
+
+/// Failure to construct the bounded static `ap_write_to_dsp_addr` byte plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ApibWriteToDspPlanError {
+    /// The address cannot be represented by the observed low-24-bit argument.
+    #[error("DSP address 0x{address:08x} exceeds the low-24-bit domain")]
+    AddressOutsideLow24 {
+        /// Caller-supplied address.
+        address: u32,
+    },
+    /// The static sequence establishes only the literal retry limit of 10.
+    #[error(
+        "retry limit {supplied} is not established for the ap_write_to_dsp_addr byte plan; expected {AP_WRITE_TO_DSP_RETRY_LIMIT}"
+    )]
+    UnsupportedRetryLimit {
+        /// Caller-supplied retry limit.
+        supplied: u8,
+    },
+}
+
+impl LegacyApibWriteToDspBytePlan {
+    /// Builds the exact four legacy primitive records for one conditional byte.
+    ///
+    /// The caller explicitly supplies all APIO arguments. This method validates
+    /// only the low-24-bit address domain and the observed retry limit; it does
+    /// not infer object presence, tokens, backend selection, or status results.
+    pub fn build(input: ApibWriteToDspByteInput) -> Result<Self, ApibWriteToDspPlanError> {
+        if input.address > LOW_24_BIT_MAX {
+            return Err(ApibWriteToDspPlanError::AddressOutsideLow24 {
+                address: input.address,
+            });
+        }
+        if input.retry_limit != AP_WRITE_TO_DSP_RETRY_LIMIT {
+            return Err(ApibWriteToDspPlanError::UnsupportedRetryLimit {
+                supplied: input.retry_limit,
+            });
+        }
+
+        Ok(Self {
+            operations: [
+                LegacyApibOperation::WriteTx(ApWriteTxArguments {
+                    object: input.object,
+                    value: input.address,
+                    retry_limit: input.retry_limit,
+                }),
+                LegacyApibOperation::Hv(ApHvArguments {
+                    object: input.object,
+                    token: input.token9,
+                    retry_limit: input.retry_limit,
+                }),
+                LegacyApibOperation::WriteTx(ApWriteTxArguments {
+                    object: input.object,
+                    value: u32::from(input.data),
+                    retry_limit: input.retry_limit,
+                }),
+                LegacyApibOperation::Hv(ApHvArguments {
+                    object: input.object,
+                    token: input.token13,
+                    retry_limit: input.retry_limit,
+                }),
+            ],
+        })
+    }
+
+    /// Returns the fixed four records in the statically established call order.
+    #[must_use]
+    pub const fn operations(&self) -> &[LegacyApibOperation; 4] {
+        &self.operations
+    }
+}
+
 impl ApibOperation {
     /// Encodes the verified logical tag and payload, without USB framing.
     #[must_use]
@@ -101,7 +243,9 @@ fn validate_length(response: &[u8], expected: usize) -> Result<(), ApibDecodeErr
 #[cfg(test)]
 mod tests {
     use super::{
-        ApibDecodeError, ApibOperation, ApibResponse, decode_ready_status, decode_u8, decode_u16_le,
+        ApHvArguments, ApWriteTxArguments, ApibDecodeError, ApibOperation, ApibResponse,
+        ApibWriteToDspByteInput, ApibWriteToDspPlanError, LegacyApibOperation,
+        LegacyApibWriteToDspBytePlan, decode_ready_status, decode_u8, decode_u16_le,
     };
 
     #[test]
@@ -221,6 +365,100 @@ mod tests {
             }
             .encode(),
             [0x0a, 1, 0xff, 0xff]
+        );
+    }
+
+    #[test]
+    fn builds_one_write_to_dsp_byte_step_in_the_established_legacy_order() {
+        let input = ApibWriteToDspByteInput {
+            object: 0x40,
+            address: 0x00ff_ff26,
+            token9: 0x10,
+            data: 0xa5,
+            token13: 0x27,
+            retry_limit: 10,
+        };
+
+        let plan = LegacyApibWriteToDspBytePlan::build(input).unwrap();
+
+        assert_eq!(
+            plan.operations(),
+            &[
+                LegacyApibOperation::WriteTx(ApWriteTxArguments {
+                    object: 0x40,
+                    value: 0x00ff_ff26,
+                    retry_limit: 10,
+                }),
+                LegacyApibOperation::Hv(ApHvArguments {
+                    object: 0x40,
+                    token: 0x10,
+                    retry_limit: 10,
+                }),
+                LegacyApibOperation::WriteTx(ApWriteTxArguments {
+                    object: 0x40,
+                    value: 0x0000_00a5,
+                    retry_limit: 10,
+                }),
+                LegacyApibOperation::Hv(ApHvArguments {
+                    object: 0x40,
+                    token: 0x27,
+                    retry_limit: 10,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_the_full_low_24_bit_address_boundary() {
+        let plan = LegacyApibWriteToDspBytePlan::build(ApibWriteToDspByteInput {
+            object: 0,
+            address: 0x00ff_ffff,
+            token9: 0,
+            data: 0,
+            token13: 0,
+            retry_limit: 10,
+        })
+        .unwrap();
+
+        assert_eq!(
+            plan.operations()[0],
+            LegacyApibOperation::WriteTx(ApWriteTxArguments {
+                object: 0,
+                value: 0x00ff_ffff,
+                retry_limit: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_addresses_outside_the_low_24_bit_input_domain() {
+        assert_eq!(
+            LegacyApibWriteToDspBytePlan::build(ApibWriteToDspByteInput {
+                object: 0,
+                address: 0x0100_0000,
+                token9: 0,
+                data: 0,
+                token13: 0,
+                retry_limit: 10,
+            }),
+            Err(ApibWriteToDspPlanError::AddressOutsideLow24 {
+                address: 0x0100_0000,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_a_retry_limit_not_established_for_this_plan() {
+        assert_eq!(
+            LegacyApibWriteToDspBytePlan::build(ApibWriteToDspByteInput {
+                object: 0,
+                address: 0,
+                token9: 0,
+                data: 0,
+                token13: 0,
+                retry_limit: 9,
+            }),
+            Err(ApibWriteToDspPlanError::UnsupportedRetryLimit { supplied: 9 })
         );
     }
 }
