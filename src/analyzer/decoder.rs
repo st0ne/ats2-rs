@@ -84,6 +84,20 @@ mod tests {
     }
 
     #[test]
+    fn documented_shared_ratio_fixture_decodes_to_one_half() {
+        // This is the static fcn.100102d8 lower-ratio fixture, not a THD+N
+        // property result: both selected scale objects use Q1.23 and factor 1.
+        let numerator = decode_raw_word(0x0020_0000, AnalyzerRawFormat::SignedQ1_23)
+            .expect("Q1.23 has no zero-word error");
+        let denominator = decode_raw_word(0x0040_0000, AnalyzerRawFormat::SignedQ1_23)
+            .expect("Q1.23 has no zero-word error");
+
+        assert_eq!(numerator, 0.25);
+        assert_eq!(denominator, 0.5);
+        assert_eq!(numerator / denominator, 0.5);
+    }
+
+    #[test]
     fn mantissa_exponent_decodes_signed_mantissa_boundaries() {
         assert_eq!(
             decode_raw_word(
