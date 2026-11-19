@@ -5,6 +5,7 @@
 //! I/O. [`transfer`] performs transfers only after an explicit caller invocation.
 
 pub mod apio_v3;
+pub mod apio_v3_transport_plan;
 pub mod framing;
 pub mod logical;
 pub mod transfer;
