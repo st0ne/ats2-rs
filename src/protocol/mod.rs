@@ -4,6 +4,7 @@
 //! applies verified marker, packet-alignment, and response-offset rules without
 //! I/O. [`transfer`] performs transfers only after an explicit caller invocation.
 
+pub mod apio_v3;
 pub mod framing;
 pub mod logical;
 pub mod transfer;
